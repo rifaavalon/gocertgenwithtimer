@@ -1,9 +1,11 @@
 name: Generate Certificate
 
+# Allow the workflow to be triggered manually
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   generate-cert:
@@ -27,4 +29,3 @@ jobs:
           path: |
             cert.pem
             key.pem
-
