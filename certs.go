@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -18,8 +17,6 @@ import (
 
 func publicKey(priv interface{}) interface{} {
 	switch k := priv.(type) {
-	case *rsa.PrivateKey:
-		return &k.PublicKey
 	case *ecdsa.PrivateKey:
 		return &k.PublicKey
 	default:
@@ -29,13 +26,10 @@ func publicKey(priv interface{}) interface{} {
 
 func pemBlockForKey(priv interface{}) *pem.Block {
 	switch k := priv.(type) {
-	case *rsa.PrivateKey:
-		return &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)}
 	case *ecdsa.PrivateKey:
 		b, err := x509.MarshalECPrivateKey(k)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Unable to marshal ECDSA private key: %v", err)
-			os.Exit(2)
+			log.Fatalf("Unable to marshal ECDSA private key: %v", err)
 		}
 		return &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}
 	default:
@@ -44,47 +38,54 @@ func pemBlockForKey(priv interface{}) *pem.Block {
 }
 
 func main() {
-	// priv, err := rsa.GenerateKey(rand.Reader, *rsaBits)
-	priv, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	// Generate ECDSA private key
+	priv, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error generating private key: %v", err)
 	}
+
+	// Create a random serial number
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		log.Fatalf("Failed to generate serial number: %v", err)
+	}
+
+	// Create a certificate template
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			Organization: []string{"Acme Co"},
 		},
 		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour * 24 * 180),
+		NotAfter:  time.Now().Add(365 * 24 * time.Hour), // 1 year validity
 
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"}, // Update as needed
 	}
 
-	/*
-	   hosts := strings.Split(*host, ",")
-	   for _, h := range hosts {
-	   	if ip := net.ParseIP(h); ip != nil {
-	   		template.IPAddresses = append(template.IPAddresses, ip)
-	   	} else {
-	   		template.DNSNames = append(template.DNSNames, h)
-	   	}
-	   }
-	   if *isCA {
-	   	template.IsCA = true
-	   	template.KeyUsage |= x509.KeyUsageCertSign
-	   }
-	*/
-
+	// Generate the certificate
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey(priv), priv)
 	if err != nil {
-		log.Fatalf("Failed to create certificate: %s", err)
+		log.Fatalf("Failed to create certificate: %v", err)
 	}
-	out := &bytes.Buffer{}
-	pem.Encode(out, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	fmt.Println(out.String())
-	out.Reset()
-	pem.Encode(out, pemBlockForKey(priv))
-	fmt.Println(out.String())
+
+	// Write the certificate to a file
+	certOut, err := os.Create("cert.pem")
+	if err != nil {
+		log.Fatalf("Failed to open cert.pem for writing: %v", err)
+	}
+	defer certOut.Close()
+	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	fmt.Println("Certificate written to cert.pem")
+
+	// Write the private key to a file
+	keyOut, err := os.Create("key.pem")
+	if err != nil {
+		log.Fatalf("Failed to open key.pem for writing: %v", err)
+	}
+	defer keyOut.Close()
+	pem.Encode(keyOut, pemBlockForKey(priv))
+	fmt.Println("Private key written to key.pem")
 }
